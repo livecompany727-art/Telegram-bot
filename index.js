@@ -595,7 +595,7 @@ bot.action("del_menu_start", async (ctx) => {
     await ctx.editMessageText("Sila pilih butang untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^do_rm_menu_(.+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); // Jawab DULU supaya loading hilang
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { });
     delete CASH.menuData[ctx.match[1]];
     await saveConfig("menuData", CASH.menuData).catch(() => { });
     const list = Object.keys(CASH.menuData).map((k, i) => `${i + 1}. ${k}`).join("\n");
@@ -629,7 +629,7 @@ bot.action("del_link_start", async (ctx) => {
     await ctx.editMessageText("Sila pilih menu untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^do_rm_link_(.+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); // Jawab DULU supaya loading hilang
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { });
     delete CASH.linkMenuData[ctx.match[1]];
     await saveConfig("linkMenuData", CASH.linkMenuData).catch(() => { });
     const list = Object.keys(CASH.linkMenuData).map((k, i) => `${i + 1}. ${CASH.linkMenuData[k].label}`).join("\n");
@@ -853,7 +853,7 @@ bot.action("do_del_ban", async (ctx) => {
 bot.action(/^rm_ban_idx_(\d+)$/, async (ctx) => {
     const idx = parseInt(ctx.match[1]);
     const removed = CASH.bannedWords[idx];
-    await ctx.answerCbQuery(removed ? `✅ Dipadam: ${removed}` : "⚠️ Tidak dijumpai.").catch(() => { }); // Jawab DULU
+    await ctx.answerCbQuery(removed ? `✅ Dipadam: ${removed}` : "⚠️ Tidak dijumpai.").catch(() => { });
     if (removed !== undefined) {
         CASH.bannedWords.splice(idx, 1);
         await saveConfig("bannedWords", CASH.bannedWords).catch(() => { });
