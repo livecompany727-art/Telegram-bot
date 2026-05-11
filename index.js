@@ -1257,6 +1257,24 @@ bot.on("message", async (ctx, next) => {
 
     // C. USER LOGIC
     if (isPrivate) {
+
+        // ✅ LOG DULU (sebelum return) — SEMUA mesej user akan di-log
+        if (CASH.toggles.privateLog) {
+            const msgText = ctx.message.text || ctx.message.caption || "";
+            if (!msgText.startsWith("/")) {
+                try {
+                    await ctx.telegram.forwardMessage(
+                        CASH.LOG_GROUP_ID,        // Destinasi: PANTAU BOT SINI
+                        ctx.chat.id,              // Dari: Private chat user
+                        ctx.message.message_id    // ID mesej
+                    );
+                    console.log(`✅ LOG: Mesej dari ${ctx.from.first_name} (${ctx.from.id}) berjaya di-log`);
+                } catch (e) {
+                    console.error(`❌ LOG GAGAL: ${e.message} | LOG_GROUP_ID=${CASH.LOG_GROUP_ID}`);
+                }
+            }
+        }
+
         if (CASH.linkMenuData[text]) return ctx.reply("👇 Click link:", Markup.inlineKeyboard([[Markup.button.url(CASH.linkMenuData[text].label, CASH.linkMenuData[text].url)]]));
         if (CASH.menuData[text]) {
             const d = CASH.menuData[text];
@@ -1271,13 +1289,10 @@ bot.on("message", async (ctx, next) => {
             }
             return;
         }
-        // Feedback Forwarding
-        if (CASH.toggles.privateLog && !text.startsWith("/")) {
-            await ctx.forwardMessage(CASH.LOG_GROUP_ID).catch(() => { });
-        }
         await ctx.reply("BACK TO MENU TEKAN /start").catch(() => { });
     }
     if (!isPrivate) await handleModeration(ctx);
+
 });
 
 
