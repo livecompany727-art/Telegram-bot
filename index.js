@@ -595,13 +595,14 @@ bot.action("del_menu_start", async (ctx) => {
     await ctx.editMessageText("Sila pilih butang untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^do_rm_menu_(.+)$/, async (ctx) => {
-    delete CASH.menuData[ctx.match[1]]; await saveConfig("menuData", CASH.menuData);
-    await ctx.answerCbQuery("✅ Berjaya dipadam!");
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); // Jawab DULU supaya loading hilang
+    delete CASH.menuData[ctx.match[1]];
+    await saveConfig("menuData", CASH.menuData).catch(() => { });
     const list = Object.keys(CASH.menuData).map((k, i) => `${i + 1}. ${k}`).join("\n");
     return ctx.editMessageText(`🔘 **MENU UTAMA/KEYBOARD**\n\n${list || "(Tiada Data)"}`, Markup.inlineKeyboard([
         [Markup.button.callback("➕ Tambah Butang", "add_menu_start"), Markup.button.callback("🗑 Padam Butang", "del_menu_start")],
         [Markup.button.callback("🔙 Kembali", "back_home")]
-    ]));
+    ])).catch(() => { });
 });
 
 // Link Logic
@@ -628,13 +629,14 @@ bot.action("del_link_start", async (ctx) => {
     await ctx.editMessageText("Sila pilih menu untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^do_rm_link_(.+)$/, async (ctx) => {
-    delete CASH.linkMenuData[ctx.match[1]]; await saveConfig("linkMenuData", CASH.linkMenuData);
-    await ctx.answerCbQuery("✅ Berjaya dipadam!");
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); // Jawab DULU supaya loading hilang
+    delete CASH.linkMenuData[ctx.match[1]];
+    await saveConfig("linkMenuData", CASH.linkMenuData).catch(() => { });
     const list = Object.keys(CASH.linkMenuData).map((k, i) => `${i + 1}. ${CASH.linkMenuData[k].label}`).join("\n");
     return ctx.editMessageText(`🔗 **MENU LINK (HEADER)**\n\n${list || "(Tiada Data)"}`, Markup.inlineKeyboard([
         [Markup.button.callback("➕ Tambah Menu", "add_link_start"), Markup.button.callback("🗑 Padam Menu", "del_link_start")],
         [Markup.button.callback("🔙 Kembali", "back_home")]
-    ]));
+    ])).catch(() => { });
 });
 
 // Handler untuk Inline Click (Post Type)
@@ -850,10 +852,11 @@ bot.action("do_del_ban", async (ctx) => {
 
 bot.action(/^rm_ban_idx_(\d+)$/, async (ctx) => {
     const idx = parseInt(ctx.match[1]);
-    if (CASH.bannedWords[idx] !== undefined) {
-        const removed = CASH.bannedWords.splice(idx, 1);
-        await saveConfig("bannedWords", CASH.bannedWords);
-        await ctx.answerCbQuery(`✅ Dipadam: ${removed}`);
+    const removed = CASH.bannedWords[idx];
+    await ctx.answerCbQuery(removed ? `✅ Dipadam: ${removed}` : "⚠️ Tidak dijumpai.").catch(() => { }); // Jawab DULU
+    if (removed !== undefined) {
+        CASH.bannedWords.splice(idx, 1);
+        await saveConfig("bannedWords", CASH.bannedWords).catch(() => { });
     }
     // Refresh list
     const list = CASH.bannedWords.map((w, i) => `<b>${i + 1}.</b> <code>${String(w).replace(/</g, '&lt;')}</code>`).join("\n");
@@ -1257,24 +1260,6 @@ bot.on("message", async (ctx, next) => {
 
     // C. USER LOGIC
     if (isPrivate) {
-
-        // ✅ LOG DULU (sebelum return) — SEMUA mesej user akan di-log
-        if (CASH.toggles.privateLog) {
-            const msgText = ctx.message.text || ctx.message.caption || "";
-            if (!msgText.startsWith("/")) {
-                try {
-                    await ctx.telegram.forwardMessage(
-                        CASH.LOG_GROUP_ID,        // Destinasi: PANTAU BOT SINI
-                        ctx.chat.id,              // Dari: Private chat user
-                        ctx.message.message_id    // ID mesej
-                    );
-                    console.log(`✅ LOG: Mesej dari ${ctx.from.first_name} (${ctx.from.id}) berjaya di-log`);
-                } catch (e) {
-                    console.error(`❌ LOG GAGAL: ${e.message} | LOG_GROUP_ID=${CASH.LOG_GROUP_ID}`);
-                }
-            }
-        }
-
         if (CASH.linkMenuData[text]) return ctx.reply("👇 Click link:", Markup.inlineKeyboard([[Markup.button.url(CASH.linkMenuData[text].label, CASH.linkMenuData[text].url)]]));
         if (CASH.menuData[text]) {
             const d = CASH.menuData[text];
@@ -1289,10 +1274,13 @@ bot.on("message", async (ctx, next) => {
             }
             return;
         }
+        // Feedback Forwarding
+        if (CASH.toggles.privateLog && !text.startsWith("/")) {
+            await ctx.forwardMessage(CASH.LOG_GROUP_ID).catch(() => { });
+        }
         await ctx.reply("BACK TO MENU TEKAN /start").catch(() => { });
     }
     if (!isPrivate) await handleModeration(ctx);
-
 });
 
 
