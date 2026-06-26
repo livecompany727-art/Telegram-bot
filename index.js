@@ -43,7 +43,9 @@ const CASH = {
     },
     welcomeMessage: "👋 **SELAMAT DATANG / WELCOME** %NAME%!\n\n🇲🇾 Selamat datang ke Group Official kami! Sila baca rules & enjoy.\n🇬🇧 Welcome to our Official Group! Please read the rules & enjoy.\n\n🚀 *Jangan lupa check Pinned Message!*",
     autoReplies: {},
-    stats: { totalForwards: 0, lastStatsReset: new Date() }
+    stats: { totalForwards: 0, lastStatsReset: new Date() },
+    autoForward: { messageIds: [], chatId: null, isActive: false, currentIndex: 0 },
+    autoForwardGroups: []
 };
 
 // Undo/Rollback Storage (Temporary Memory)
@@ -136,7 +138,7 @@ async function loadConfig() {
         await load("CHANNEL_USERNAME", "AFB88_OFFICIAL");
         await load("forwardAdmins", []);
         await load("toggles", { broadcastToSubs: true, antiLink: true, antiBan: true, privateLog: true, useCaptcha: true, welcomeMsg: true });
-        
+
         if (CASH.toggles.welcomeMsg === undefined) {
             CASH.toggles.welcomeMsg = true;
             await saveConfig("toggles", CASH.toggles);
@@ -144,6 +146,11 @@ async function loadConfig() {
         await load("welcomeMessage", "👋 **SELAMAT DATANG / WELCOME** %NAME%!\n\n🇲🇾 Selamat datang ke Group Official kami! Sila baca rules & enjoy.\n🇬🇧 Welcome to our Official Group! Please read the rules & enjoy.\n\n🚀 *Jangan lupa check Pinned Message!*");
         await load("autoReplies", {});
         await load("stats", { totalForwards: 0, lastStatsReset: new Date() });
+        await load("autoForward", { messageIds: [], chatId: null, isActive: false, currentIndex: 0 });
+        await load("autoForwardGroups", []);
+
+        // Start Auto-Forward Timer System
+        startAutoForwardTimer();
 
         if (!CASH.admins.includes(CASH.SUPER_ADMIN_ID)) CASH.admins.push(CASH.SUPER_ADMIN_ID);
 
@@ -152,10 +159,59 @@ async function loadConfig() {
     }
 }
 
+// --- AUTO-FORWARD TIMER (Tahan Restart) ---
+let autoForwardInterval = null;
+function startAutoForwardTimer() {
+    if (autoForwardInterval) clearInterval(autoForwardInterval);
+    
+    // Semak setiap 1 minit jika sudah cukup 1 Jam
+    autoForwardInterval = setInterval(async () => {
+        if (!CASH.autoForward || !CASH.autoForward.isActive) return;
+        
+        const now = Date.now();
+        const lastRun = CASH.autoForward.lastRun || 0;
+        const ONE_HOUR = 1 * 60 * 60 * 1000; // Tukar ke 1 Jam
+        
+        if (now - lastRun >= ONE_HOUR) {
+            const { messageIds, chatId } = CASH.autoForward;
+            const uniqueTargets = [...new Set(CASH.autoForwardGroups || [])];
+            
+            if (uniqueTargets.length === 0 || !messageIds || messageIds.length === 0) return;
+            
+            // Round-Robin Logic
+            let cIndex = CASH.autoForward.currentIndex || 0;
+            if (cIndex >= messageIds.length) cIndex = 0;
+            
+            const mId = messageIds[cIndex];
+            let count = 0;
+            
+            for (const t of uniqueTargets) {
+                try {
+                    await bot.telegram.forwardMessage(t, chatId, mId);
+                    count++;
+                    await new Promise(r => setTimeout(r, 500)); // Delay sikit elak limit
+                } catch (e) {
+                    console.log(`Auto-Forward Error to ${t}: ${e.message}`);
+                }
+            }
+            
+            // Update state & next index
+            CASH.autoForward.currentIndex = (cIndex + 1) % messageIds.length;
+            CASH.autoForward.lastRun = now;
+            saveConfig("autoForward", CASH.autoForward).catch(()=>{});
+            
+            if (count > 0 && CASH.stats) {
+                CASH.stats.totalForwards += count;
+                saveConfig("stats", CASH.stats).catch(()=>{});
+            }
+        }
+    }, 60 * 1000); 
+}
+
 async function saveConfig(key, value) {
     if (!configColl) return;
     CASH[key] = value;
-    await configColl.updateOne({ key }, { $set: { value } }, { upsert: true }).catch(()=>{});
+    await configColl.updateOne({ key }, { $set: { value } }, { upsert: true }).catch(() => { });
 }
 
 // ================= BOT LOGIC =================
@@ -198,7 +254,7 @@ bot.use(async (ctx, next) => {
             const user = ctx.from.username || ctx.from.first_name || "Unknown";
             console.log(`📩 INCOMING MSG [${user}]: ${ctx.message.text || ctx.message.caption || "Media"}`);
         }
-    } catch (e) {}
+    } catch (e) { }
     await next();
 });
 
@@ -230,7 +286,7 @@ bot.on("new_chat_members", async (ctx) => {
                 const m = await ctx.reply(captchaText, { parse_mode: "Markdown", ...captchaKbd });
                 setTimeout(() => ctx.telegram.deleteMessage(ctx.chat.id, m.message_id).catch(() => { }), 120000);
             } catch (e) { console.error("Captcha Mute Error:", e.message); }
-            continue; 
+            continue;
         }
         if (!CASH.toggles.welcomeMsg) continue;
         let welcomeText = CASH.welcomeMessage || "👋 **SELAMAT DATANG** %NAME%!";
@@ -272,7 +328,7 @@ bot.start(async (ctx) => {
     }
 
     console.log("⚡ PROCESSING /START...");
-    if (!ctx.from) return; 
+    if (!ctx.from) return;
 
     try {
         if (subscribersColl) {
@@ -353,7 +409,7 @@ bot.action("close_panel", async (ctx) => {
     ctx.deleteMessage().catch(() => { });
 });
 bot.action("back_home", async (ctx) => {
-    await ctx.answerCbQuery().catch(() => {});
+    await ctx.answerCbQuery().catch(() => { });
     const txt = `🎛 **PANEL ADMIN BOT V2**\n\nSila pilih menu tetapan di bawah:`;
     await ctx.editMessageText(txt, {
         parse_mode: "Markdown",
@@ -421,8 +477,8 @@ bot.action("manage_features", async (ctx) => {
 bot.action(/^toggle_feat_(.+)$/, async (ctx) => {
     const feat = ctx.match[1];
     CASH.toggles[feat] = !CASH.toggles[feat];
-    await ctx.answerCbQuery(`✅ Status ${feat} ditukar!`).catch(()=>{});
-    await saveConfig("toggles", CASH.toggles).catch(()=>{});
+    await ctx.answerCbQuery(`✅ Status ${feat} ditukar!`).catch(() => { });
+    await saveConfig("toggles", CASH.toggles).catch(() => { });
 
     const { broadcastToSubs, antiLink, antiBan, privateLog, useCaptcha } = CASH.toggles;
     const txt = `🛠 <b>KAWALAN FITUR BOT</b>\n\n` +
@@ -454,7 +510,7 @@ bot.action(/^edit_id_(.+)$/, async (ctx) => {
 });
 
 bot.action("refresh_bot", async (ctx) => {
-    await ctx.answerCbQuery("🚀 Memulakan semula bot...").catch(()=>{});
+    await ctx.answerCbQuery("🚀 Memulakan semula bot...").catch(() => { });
     await ctx.editMessageText("🔄 **BOT SEDANG DI-REFRESH...**\n\nSila tunggu lebih kurang 10-30 saat untuk proses deploy semula. Panel ini akan ditutup.");
     setTimeout(() => {
         ctx.deleteMessage().catch(() => { });
@@ -496,13 +552,13 @@ bot.action("del_reply_kw", async (ctx) => {
 });
 
 bot.action(/^rm_reply_idx_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Keyword dibuang!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Keyword dibuang!").catch(() => { });
     const keys = Object.keys(CASH.autoReplies);
     const idx = parseInt(ctx.match[1]);
     const kw = keys[idx];
     if (kw) {
         delete CASH.autoReplies[kw];
-        await saveConfig("autoReplies", CASH.autoReplies).catch(()=>{});
+        await saveConfig("autoReplies", CASH.autoReplies).catch(() => { });
     }
     ctx.triggerAction("manage_auto_reply");
 });
@@ -530,9 +586,9 @@ bot.action("manage_stats", async (ctx) => {
 });
 
 bot.action("reset_stats", async (ctx) => {
-    await ctx.answerCbQuery("✅ Statistik telah di-reset!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Statistik telah di-reset!").catch(() => { });
     CASH.stats = { totalForwards: 0, lastStatsReset: new Date() };
-    await saveConfig("stats", CASH.stats).catch(()=>{});
+    await saveConfig("stats", CASH.stats).catch(() => { });
     ctx.triggerAction("manage_stats");
 });
 
@@ -559,7 +615,7 @@ bot.action("export_subs", async (ctx) => {
 
 // --- 2. MENU MANAGERS ---
 bot.action("manage_menu", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     const list = Object.keys(CASH.menuData).map((k, i) => `${i + 1}. ${k}`).join("\n");
     await ctx.editMessageText(`🔘 **MENU UTAMA/KEYBOARD**\n\n${list || "(Tiada Data)"}`, Markup.inlineKeyboard([
         [Markup.button.callback("➕ Tambah Butang", "add_menu_start"), Markup.button.callback("🗑 Padam Butang", "del_menu_start")],
@@ -572,13 +628,13 @@ bot.action("add_menu_start", async (ctx) => { await ctx.answerCbQuery().catch(()
 bot.action("del_menu_start", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const keys = Object.keys(CASH.menuData);
-    const buttons = keys.map((k, i) => [Markup.button.callback(`🗑 ${k.substring(0,25)}`, `rm_menu_idx_${i}`)]);
+    const buttons = keys.map((k, i) => [Markup.button.callback(`🗑 ${k.substring(0, 25)}`, `rm_menu_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_menu")]);
     await ctx.editMessageText("Sila pilih butang untuk dipadam:", Markup.inlineKeyboard(buttons)).catch(e => ctx.reply("❌ Ralat paparan: " + e.message));
 });
 
 bot.action(/^rm_menu_idx_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); 
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { });
     const keys = Object.keys(CASH.menuData);
     const idx = parseInt(ctx.match[1]);
     const k = keys[idx];
@@ -612,13 +668,13 @@ bot.action("add_link_start", async (ctx) => {
 bot.action("del_link_start", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const keys = Object.keys(CASH.linkMenuData);
-    const buttons = keys.map((k, i) => [Markup.button.callback(`🗑 ${CASH.linkMenuData[k].label.substring(0,25)}`, `rm_link_idx_${i}`)]);
+    const buttons = keys.map((k, i) => [Markup.button.callback(`🗑 ${CASH.linkMenuData[k].label.substring(0, 25)}`, `rm_link_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_link")]);
     await ctx.editMessageText("Sila pilih menu untuk dipadam:", Markup.inlineKeyboard(buttons)).catch(e => ctx.reply("❌ Ralat paparan: " + e.message));
 });
 
 bot.action(/^rm_link_idx_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { }); 
+    await ctx.answerCbQuery("✅ Berjaya dipadam!").catch(() => { });
     const keys = Object.keys(CASH.linkMenuData);
     const idx = parseInt(ctx.match[1]);
     const k = keys[idx];
@@ -636,8 +692,8 @@ bot.action(/^rm_link_idx_(\d+)$/, async (ctx) => {
 bot.action(/^trig_inline_(.+)$/, async (ctx) => {
     const k = ctx.match[1];
     const d = CASH.linkMenuData[k];
-    if (!d) return ctx.answerCbQuery("❌ Menu tidak dijumpai.").catch(()=>{});
-    await ctx.answerCbQuery().catch(()=>{});
+    if (!d) return ctx.answerCbQuery("❌ Menu tidak dijumpai.").catch(() => { });
+    await ctx.answerCbQuery().catch(() => { });
 
     const btnLabel = d.btnLabel || "TEKAN SINI / CLICK HERE 🎁";
     const btn = Markup.inlineKeyboard([[Markup.button.url(btnLabel, d.url)]]);
@@ -653,8 +709,8 @@ bot.action(/^trig_inline_(.+)$/, async (ctx) => {
 bot.action(/^trig_menu_(.+)$/, async (ctx) => {
     const k = ctx.match[1];
     const d = CASH.menuData[k];
-    if (!d) return ctx.answerCbQuery("❌ Menu tidak dijumpai/telah dipadam.").catch(()=>{});
-    await ctx.answerCbQuery().catch(()=>{});
+    if (!d) return ctx.answerCbQuery("❌ Menu tidak dijumpai/telah dipadam.").catch(() => { });
+    await ctx.answerCbQuery().catch(() => { });
 
     const btnLabel = d.btnLabel || "TEKAN SINI / CLICK HERE 🎁";
     const btn = Markup.inlineKeyboard([[Markup.button.url(btnLabel, d.url)]]);
@@ -684,19 +740,19 @@ bot.action("manage_start", async (ctx) => {
 });
 
 bot.action("do_chg_welcome_msg", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     adminState[ctx.from.id] = { action: "WAIT_WELCOME_MSG" };
     ctx.editMessageText("👋 **UBAH MESEJ WELCOME**\n\nSila taip mesej aluan baru anda.\n\n📌 **Tips:** Gunakan `%NAME%` untuk auto-tag nama user.\n\n_Contoh: Selamat datang %NAME% ke group kami!_", { parse_mode: "Markdown" });
 });
 
 bot.action("do_chg_start_msg", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     adminState[ctx.from.id] = { action: "WAIT_START_MEDIA", data: {} };
     ctx.editMessageText("1️⃣ **LANGKAH 1/2**\nSila hantar **GAMBAR/LINK** baru:\n_(Taip 'skip' untuk kekalkan gambar lama)_", { parse_mode: "Markdown" });
 });
 
 bot.action("do_chg_title", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     const lines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
     const displayList = lines.map((l, i) => `${i + 1}. ${l}`).join("\n");
 
@@ -710,13 +766,13 @@ bot.action("do_chg_title", async (ctx) => {
 });
 
 bot.action("add_title_line", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     adminState[ctx.from.id] = { action: "WAIT_ADD_TITLE_LINE" };
     ctx.editMessageText("➕ **TAMBAH BARIS**\nSila taip teks untuk baris baru:", { parse_mode: "Markdown" });
 });
 
 bot.action("del_title_line", async (ctx) => {
-    await ctx.answerCbQuery().catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     const lines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
     const buttons = lines.map((l, i) => [Markup.button.callback(`🗑 ${l.substring(0, 20)}...`, `rm_title_line_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "do_chg_title")]);
@@ -724,13 +780,13 @@ bot.action("del_title_line", async (ctx) => {
 });
 
 bot.action(/^rm_title_line_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Baris dipadam!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Baris dipadam!").catch(() => { });
     const idx = parseInt(ctx.match[1]);
     let lines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
     if (lines[idx] !== undefined) {
         lines.splice(idx, 1);
         CASH.menuTitle = lines.join("\n");
-        await saveConfig("menuTitle", CASH.menuTitle).catch(()=>{});
+        await saveConfig("menuTitle", CASH.menuTitle).catch(() => { });
     }
     const updatedLines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
     const displayList = updatedLines.map((l, i) => `${i + 1}. ${l}`).join("\n");
@@ -745,18 +801,90 @@ bot.action(/^rm_title_line_(\d+)$/, async (ctx) => {
 
 bot.action("manage_broadcast", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    ctx.editMessageText(`📢 **SISTEM BROADCAST**\n1️⃣ Hantar promo ke **Group Asal (Source)**\n2️⃣ **Reply** mesej tersebut\n3️⃣ Taip command: \`/forward\`\n\n(❗️ Taip \`/undo\` jika tersalah hantar)`, { parse_mode: "Markdown", ...Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "back_home")]]) });
+    const af = CASH.autoForward || { isActive: false, messageIds: [] };
+    const statusAF = af.isActive ? "✅ ON" : "❌ OFF";
+    const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length} Mesej Diset` : "Belum diset";
+
+    ctx.editMessageText(
+        `📢 **SISTEM BROADCAST & AUTO-FORWARD**\n\n` +
+        `**1. Broadcast Manual:**\n` +
+        `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
+        `**2. Auto-Forward (Setiap 2 Jam):**\n` +
+        `Status: ${statusAF}\n` +
+        `Mesej: ${msgStatus}\n` +
+        `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
+        `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
+        { 
+            parse_mode: "Markdown", 
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd")],
+                [Markup.button.callback("🔙 Kembali", "back_home")]
+            ]) 
+        }
+    );
+});
+
+bot.action("toggle_autofwd", async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
+    
+    if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
+        return ctx.reply("⚠️ Sila set mesej Auto-Forward dahulu menggunakan command `/setautofwd` (reply pada mesej).", { parse_mode: "Markdown" });
+    }
+    
+    CASH.autoForward.isActive = !CASH.autoForward.isActive;
+    await saveConfig("autoForward", CASH.autoForward);
+    startAutoForwardTimer();
+    
+    const af = CASH.autoForward;
+    const statusAF = af.isActive ? "✅ ON" : "❌ OFF";
+    const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length} Mesej Diset` : "Belum diset";
+
+    await ctx.editMessageText(
+        `📢 **SISTEM BROADCAST & AUTO-FORWARD**\n\n` +
+        `**1. Broadcast Manual:**\n` +
+        `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
+        `**2. Auto-Forward (Setiap 2 Jam):**\n` +
+        `Status: ${statusAF}\n` +
+        `Mesej: ${msgStatus}\n` +
+        `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
+        `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
+        { 
+            parse_mode: "Markdown", 
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd")],
+                [Markup.button.callback("🔙 Kembali", "back_home")]
+            ]) 
+        }
+    );
 });
 
 // Admin & Ban Logic
 bot.action("manage_admin", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    await ctx.editMessageText(`👮 **URUS ADMIN & GROUP**\n👤 Jumlah Admin: ${CASH.admins.length}\n📢 Forwarder Sah: ${CASH.forwardAdmins.length}\n👥 Jumlah Group: ${CASH.targetGroups.length}`, Markup.inlineKeyboard([
+    await ctx.editMessageText(`👮 **URUS ADMIN & GROUP**\n👤 Jumlah Admin: ${CASH.admins.length}\n📢 Forwarder Sah: ${CASH.forwardAdmins.length}\n👥 Group Manual: ${CASH.targetGroups.length}\n🤖 Group Auto-Fwd: ${(CASH.autoForwardGroups || []).length}`, Markup.inlineKeyboard([
         [Markup.button.callback("➕ Tambah Admin", "do_add_admin"), Markup.button.callback("➖ Buang Admin", "do_del_admin")],
         [Markup.button.callback("➕ Tambah Forwarder", "do_add_fwd_admin"), Markup.button.callback("➖ Buang Forwarder", "do_del_fwd_admin")],
-        [Markup.button.callback("➕ Tambah Group", "do_add_group"), Markup.button.callback("➖ Buang Group", "do_del_group")],
+        [Markup.button.callback("➕ Group Manual", "do_add_group"), Markup.button.callback("➖ Group Manual", "do_del_group")],
+        [Markup.button.callback("➕ Group Auto-Fwd", "do_add_af_group"), Markup.button.callback("➖ Group Auto-Fwd", "do_del_af_group")],
         [Markup.button.callback("🔙 Kembali", "back_home")]
     ]));
+});
+
+bot.action("do_add_af_group", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); ctx.reply("Sila taip ID Group Khas untuk Auto-Forward:"); adminState[ctx.from.id] = { action: "WAIT_ADD_AF_GROUP" }; });
+bot.action("do_del_af_group", async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    if (!CASH.autoForwardGroups || CASH.autoForwardGroups.length === 0) return ctx.reply("⚠️ Tiada group Auto-Forward.");
+    const buttons = CASH.autoForwardGroups.map((id, i) => [Markup.button.callback(`🗑 ${id}`, `rm_af_group_idx_${i}`)]);
+    buttons.push([Markup.button.callback("🔙 Batal", "manage_admin")]);
+    await ctx.editMessageText("Pilih Group Auto-Forward untuk dipadam:", Markup.inlineKeyboard(buttons));
+});
+bot.action(/^rm_af_group_idx_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery("✅ Group Auto-Fwd dipadam!").catch(()=>{});
+    const idx = parseInt(ctx.match[1]);
+    CASH.autoForwardGroups.splice(idx, 1);
+    await saveConfig("autoForwardGroups", CASH.autoForwardGroups).catch(()=>{});
+    ctx.editMessageText("Group Auto-Forward berjaya dipadam.", Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "manage_admin")]]));
 });
 bot.action("do_add_admin", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); adminState[ctx.from.id] = { action: "WAIT_ADD_ADMIN" }; ctx.reply("Sila taip ID User:"); });
 bot.action("do_del_admin", async (ctx) => {
@@ -770,12 +898,12 @@ bot.action(/^rm_admin_idx_(\d+)$/, async (ctx) => {
     const idx = parseInt(ctx.match[1]);
     const id = CASH.admins[idx];
     if (id === CASH.SUPER_ADMIN_ID) {
-        await ctx.answerCbQuery("❌ Super Admin tidak boleh dipadam!", { show_alert: true }).catch(()=>{});
+        await ctx.answerCbQuery("❌ Super Admin tidak boleh dipadam!", { show_alert: true }).catch(() => { });
         return;
     }
-    await ctx.answerCbQuery("✅ Admin dipadam!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Admin dipadam!").catch(() => { });
     CASH.admins.splice(idx, 1);
-    await saveConfig("admins", CASH.admins).catch(()=>{});
+    await saveConfig("admins", CASH.admins).catch(() => { });
     ctx.editMessageText("Admin berjaya dipadam. Klik Kembali.", Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "manage_admin")]]));
 });
 
@@ -788,10 +916,10 @@ bot.action("do_del_fwd_admin", async (ctx) => {
     await ctx.editMessageText("Pilih Forwarder untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^rm_fwd_idx_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Forwarder dipadam!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Forwarder dipadam!").catch(() => { });
     const idx = parseInt(ctx.match[1]);
     CASH.forwardAdmins.splice(idx, 1);
-    await saveConfig("forwardAdmins", CASH.forwardAdmins).catch(()=>{});
+    await saveConfig("forwardAdmins", CASH.forwardAdmins).catch(() => { });
     ctx.editMessageText("Forwarder berjaya dipadam.", Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "manage_admin")]]));
 });
 
@@ -804,10 +932,10 @@ bot.action("do_del_group", async (ctx) => {
     await ctx.editMessageText("Pilih Group untuk dipadam:", Markup.inlineKeyboard(buttons));
 });
 bot.action(/^rm_group_idx_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery("✅ Group dipadam!").catch(()=>{});
+    await ctx.answerCbQuery("✅ Group dipadam!").catch(() => { });
     const idx = parseInt(ctx.match[1]);
     CASH.targetGroups.splice(idx, 1);
-    await saveConfig("targetGroups", CASH.targetGroups).catch(()=>{});
+    await saveConfig("targetGroups", CASH.targetGroups).catch(() => { });
     ctx.editMessageText("Group berjaya dipadam.", Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "manage_admin")]]));
 });
 
@@ -927,6 +1055,43 @@ bot.command("undo", async (ctx) => {
     await bot.telegram.editMessageText(ctx.chat.id, mStats.message_id, null, `✅ Berjaya undo ${successCount} mesej.`);
 });
 
+bot.command("setautofwd", async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (!ctx.message.reply_to_message) {
+        return ctx.reply("⚠️ **Sila reply pada mesej** yang ingin ditambah ke Auto-Forward.", { parse_mode: "Markdown" });
+    }
+
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false, currentIndex: 0 };
+    if (!CASH.autoForward.messageIds) CASH.autoForward.messageIds = [];
+
+    if (CASH.autoForward.messageIds.length >= 5) {
+        return ctx.reply("⚠️ Senarai dah penuh! Maksimum 5 mesej dibenarkan.\nSila `/clearautofwd` jika mahu reset.");
+    }
+
+    CASH.autoForward.messageIds.push(ctx.message.reply_to_message.message_id);
+    CASH.autoForward.chatId = ctx.chat.id;
+    CASH.autoForward.isActive = true; // Auto ON
+    CASH.autoForward.lastRun = Date.now(); // Reset masa
+    
+    await saveConfig("autoForward", CASH.autoForward);
+    startAutoForwardTimer();
+
+    ctx.reply(`✅ **Mesej ditambah ke senarai Auto-Forward!**\nJumlah semasa: ${CASH.autoForward.messageIds.length}/5 mesej.\n\nBot akan hantar 1 mesej setiap jam secara **bergilir-gilir**.\n\n_(Nota: Gunakan /clearautofwd untuk padam senarai ini)_`, { parse_mode: "Markdown" });
+});
+
+bot.command("clearautofwd", async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    if (CASH.autoForward) {
+        CASH.autoForward.messageIds = [];
+        CASH.autoForward.isActive = false;
+        CASH.autoForward.currentIndex = 0;
+        await saveConfig("autoForward", CASH.autoForward);
+    }
+    ctx.reply("✅ Senarai mesej Auto-Forward telah dikosongkan dan dimatikan.");
+});
+
 bot.command("forward", async (ctx) => {
     const userId = ctx.from.id;
     const userName = ctx.from.first_name || "Unknown";
@@ -969,7 +1134,7 @@ bot.command("forward", async (ctx) => {
         return bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `⚠️ **FAILED FORWARD**\nReason: Tiada sasaran (sasaran 0). Sila pastikan anda telah menambah Group Target.`).catch(() => { });
     }
 
-    LAST_BROADCAST = []; 
+    LAST_BROADCAST = [];
     let count = 0;
     let failMessages = [];
 
@@ -1005,7 +1170,7 @@ bot.on("message", async (ctx, next) => {
 
     const userId = ctx.from.id;
     const isPrivate = ctx.chat.type === "private";
-    const text = textSnapshot; 
+    const text = textSnapshot;
 
     if (isAdmin(userId) && adminState[userId]) {
         const state = adminState[userId];
@@ -1050,6 +1215,18 @@ bot.on("message", async (ctx, next) => {
             if (isNaN(id)) { await ctx.reply("❌ ID Group tidak sah."); }
             else if (!CASH.targetGroups.includes(id)) { await ctx.reply("⚠️ Group ini tiada dalam senarai."); }
             else { CASH.targetGroups = CASH.targetGroups.filter(g => g !== id); await saveConfig("targetGroups", CASH.targetGroups); await ctx.reply("✅ Group berjaya dibuang."); }
+            delete adminState[userId]; return;
+        }
+        if (state.action === "WAIT_ADD_AF_GROUP") {
+            const id = parseInt(text);
+            if (isNaN(id)) { await ctx.reply("❌ ID Group tidak sah. Sila masukkan nombor (Cth: -100xxx)."); }
+            else if (CASH.autoForwardGroups && CASH.autoForwardGroups.includes(id)) { await ctx.reply("⚠️ Group ini sudah ada dalam senarai Auto-Forward."); }
+            else { 
+                if (!CASH.autoForwardGroups) CASH.autoForwardGroups = [];
+                CASH.autoForwardGroups.push(id); 
+                await saveConfig("autoForwardGroups", CASH.autoForwardGroups); 
+                await ctx.reply("✅ Group Auto-Forward berjaya ditambah."); 
+            }
             delete adminState[userId]; return;
         }
         if (state.action === "WAIT_ADD_BAN") {
@@ -1247,6 +1424,45 @@ bot.on("message", async (ctx, next) => {
 const app = express();
 app.get("/", (req, res) => res.status(200).send("Bot Online"));
 
+// CRON JOB ROUTE - Khas untuk trigger dari luar (Bypass server sleep)
+app.get("/cron/autoforward", async (req, res) => {
+    if (!CASH.autoForward || !CASH.autoForward.isActive) {
+        return res.status(200).send("Auto-Forward is OFF.");
+    }
+    const { messageIds, chatId } = CASH.autoForward;
+    const uniqueTargets = [...new Set(CASH.autoForwardGroups || [])];
+    
+    if (uniqueTargets.length === 0 || !messageIds || messageIds.length === 0) {
+        return res.status(200).send("No target groups or messages set.");
+    }
+    
+    // Round-Robin Logic
+    let cIndex = CASH.autoForward.currentIndex || 0;
+    if (cIndex >= messageIds.length) cIndex = 0;
+    const mId = messageIds[cIndex];
+    
+    let count = 0;
+    for (const t of uniqueTargets) {
+        try {
+            await bot.telegram.forwardMessage(t, chatId, mId);
+            count++;
+            await new Promise(r => setTimeout(r, 500)); // Delay sikit
+        } catch (e) {
+            console.log(`Cron Auto-Forward Error to ${t}: ${e.message}`);
+        }
+    }
+    
+    CASH.autoForward.currentIndex = (cIndex + 1) % messageIds.length;
+    CASH.autoForward.lastRun = Date.now();
+    saveConfig("autoForward", CASH.autoForward).catch(()=>{});
+    
+    if (count > 0 && CASH.stats) {
+        CASH.stats.totalForwards += count;
+        saveConfig("stats", CASH.stats).catch(()=>{});
+    }
+    res.status(200).send(`Cron triggered! Forwarded 1 message (Index: ${cIndex}) to ${count} groups.`);
+});
+
 const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 Server HTTP Running on Port: ${PORT}`);
     startServices();
@@ -1287,7 +1503,7 @@ function startKeepAlive() {
         }).on('error', (err) => {
             console.error(`❌ Keep-Alive Ping Error: ${err.message}`);
         });
-    }, 5 * 60 * 1000); 
+    }, 5 * 60 * 1000);
 }
 
 process.once('SIGINT', () => { bot.stop('SIGINT'); server.close(); });
