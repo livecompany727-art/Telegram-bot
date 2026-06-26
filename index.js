@@ -798,9 +798,16 @@ bot.action("do_chg_title", async (ctx) => {
     );
 });
 
+bot.action("add_title_line", async (ctx) => {
+    await ctx.answerCbQuery().catch(() => { });
+    adminState[ctx.from.id] = { action: "WAIT_ADD_TITLE_LINE" };
+    ctx.reply("✍️ **TAMBAH BARIS TITLE**\n\nSila taip baris teks baru untuk ditambah ke menu title:", { parse_mode: "Markdown" });
+});
+
 bot.action("del_title_line", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const lines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
+    if (lines.length === 0) return ctx.answerCbQuery("⚠️ Tiada baris untuk dipadam.", { show_alert: true }).catch(() => {});
     const buttons = lines.map((l, i) => [Markup.button.callback(`🗑 ${l.substring(0, 20)}...`, `rm_title_line_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "do_chg_title")]);
     await ctx.editMessageText("Sila pilih baris untuk dipadam:", Markup.inlineKeyboard(buttons));
@@ -930,23 +937,6 @@ bot.action("toggle_af2_time", async (ctx) => {
     saveConfig("autoFwdData", CASH.autoFwdData).catch(()=>{});
     
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
-    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
-    ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
-});
-
-bot.action("toggle_autofwd", async (ctx) => {
-    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
-    
-    if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
-        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward RR dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
-    }
-    await ctx.answerCbQuery().catch(() => { });
-    
-    CASH.autoForward.isActive = !CASH.autoForward.isActive;
-    await saveConfig("autoForward", CASH.autoForward);
-    startAutoForwardTimer();
-    
-    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
     const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
     ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
 });
@@ -1615,6 +1605,16 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 async function startServices() {
     console.log("🔄 [STARTUP] Memulakan perkhidmatan...");
 
+    // Step 1: Sambung MongoDB & load config DULU sebelum bot start
+    console.log("🔄 [DB] Menghubungi MongoDB...");
+    try {
+        await connectMongo();
+        console.log("✅ [DB] MongoDB Berjaya Disambungkan & Config Loaded.");
+    } catch (err) {
+        console.error("⚠️ [DB] MongoDB Gagal disambung (Bot guna config default):", err.message);
+    }
+
+    // Step 2: Baru launch bot polling
     try {
         await bot.telegram.deleteWebhook({ drop_pending_updates: true });
         const me = await bot.telegram.getMe();
@@ -1628,13 +1628,6 @@ async function startServices() {
     } catch (err) {
         console.error("❌ [BOT] Gagal Startup (Sila check BOT_TOKEN):", err.message);
     }
-
-    console.log("🔄 [DB] Menghubungi MongoDB...");
-    connectMongo().then(() => {
-        console.log("✅ [DB] MongoDB Berjaya Disambungkan.");
-    }).catch(err => {
-        console.error("⚠️ [DB] MongoDB Gagal disambung (Bot mungkin lambat respon):", err.message);
-    });
 
     startAutoForwardLoop();
     startKeepAlive();
