@@ -543,9 +543,9 @@ bot.action("add_reply_kw", async (ctx) => {
 });
 
 bot.action("del_reply_kw", async (ctx) => {
-    await ctx.answerCbQuery().catch(() => { });
     const keys = Object.keys(CASH.autoReplies);
-    if (keys.length === 0) return ctx.reply("⚠️ Senarai kosong.");
+    if (keys.length === 0) return ctx.answerCbQuery("⚠️ Senarai kosong.", { show_alert: true }).catch(()=>{});
+    await ctx.answerCbQuery().catch(() => { });
     const buttons = keys.map((k, i) => [Markup.button.callback(`🗑 ${k}`, `rm_reply_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_auto_reply")]);
     ctx.editMessageText("Pilih keyword untuk dibuang:", Markup.inlineKeyboard(buttons));
@@ -593,10 +593,10 @@ bot.action("reset_stats", async (ctx) => {
 });
 
 bot.action("export_subs", async (ctx) => {
-    await ctx.answerCbQuery("⏳ Menjana fail data...").catch(() => { });
     try {
         const subs = await subscribersColl.find({}).toArray();
-        if (subs.length === 0) return ctx.reply("⚠️ Tiada data user untuk di-export.");
+        if (subs.length === 0) return ctx.answerCbQuery("⚠️ Tiada data user untuk di-export.", { show_alert: true }).catch(()=>{});
+        await ctx.answerCbQuery("⏳ Menjana fail data...").catch(() => { });
 
         let content = `SENARAI SUBSCRIBER BOT - ${new Date().toLocaleString()}\n`;
         content += `==========================================\n\n`;
@@ -809,9 +809,9 @@ bot.action("manage_broadcast", async (ctx) => {
         `📢 **SISTEM BROADCAST & AUTO-FORWARD**\n\n` +
         `**1. Broadcast Manual:**\n` +
         `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
-        `**2. Auto-Forward (Setiap 2 Jam):**\n` +
+        `**2. Auto-Forward Bergilir:**\n` +
         `Status: ${statusAF}\n` +
-        `Mesej: ${msgStatus}\n` +
+        `Mesej: ${msgStatus} (Bot hantar 1 mesej bergilir-gilir)\n` +
         `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
         `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
         { 
@@ -825,12 +825,12 @@ bot.action("manage_broadcast", async (ctx) => {
 });
 
 bot.action("toggle_autofwd", async (ctx) => {
-    await ctx.answerCbQuery().catch(() => { });
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
     
     if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
-        return ctx.reply("⚠️ Sila set mesej Auto-Forward dahulu menggunakan command `/setautofwd` (reply pada mesej).", { parse_mode: "Markdown" });
+        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
     }
+    await ctx.answerCbQuery().catch(() => { });
     
     CASH.autoForward.isActive = !CASH.autoForward.isActive;
     await saveConfig("autoForward", CASH.autoForward);
@@ -844,9 +844,9 @@ bot.action("toggle_autofwd", async (ctx) => {
         `📢 **SISTEM BROADCAST & AUTO-FORWARD**\n\n` +
         `**1. Broadcast Manual:**\n` +
         `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
-        `**2. Auto-Forward (Setiap 2 Jam):**\n` +
+        `**2. Auto-Forward Bergilir:**\n` +
         `Status: ${statusAF}\n` +
-        `Mesej: ${msgStatus}\n` +
+        `Mesej: ${msgStatus} (Bot hantar 1 mesej bergilir-gilir)\n` +
         `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
         `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
         { 
@@ -873,8 +873,8 @@ bot.action("manage_admin", async (ctx) => {
 
 bot.action("do_add_af_group", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); ctx.reply("Sila taip ID Group Khas untuk Auto-Forward:"); adminState[ctx.from.id] = { action: "WAIT_ADD_AF_GROUP" }; });
 bot.action("do_del_af_group", async (ctx) => {
+    if (!CASH.autoForwardGroups || CASH.autoForwardGroups.length === 0) return ctx.answerCbQuery("⚠️ Tiada group Auto-Forward.", { show_alert: true }).catch(()=>{});
     await ctx.answerCbQuery().catch(() => { });
-    if (!CASH.autoForwardGroups || CASH.autoForwardGroups.length === 0) return ctx.reply("⚠️ Tiada group Auto-Forward.");
     const buttons = CASH.autoForwardGroups.map((id, i) => [Markup.button.callback(`🗑 ${id}`, `rm_af_group_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_admin")]);
     await ctx.editMessageText("Pilih Group Auto-Forward untuk dipadam:", Markup.inlineKeyboard(buttons));
@@ -888,8 +888,8 @@ bot.action(/^rm_af_group_idx_(\d+)$/, async (ctx) => {
 });
 bot.action("do_add_admin", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); adminState[ctx.from.id] = { action: "WAIT_ADD_ADMIN" }; ctx.reply("Sila taip ID User:"); });
 bot.action("do_del_admin", async (ctx) => {
+    if (CASH.admins.length === 0) return ctx.answerCbQuery("⚠️ Tiada admin.", { show_alert: true }).catch(()=>{});
     await ctx.answerCbQuery().catch(() => { });
-    if (CASH.admins.length === 0) return ctx.reply("⚠️ Tiada admin.");
     const buttons = CASH.admins.map((id, i) => [Markup.button.callback(`🗑 ${id}`, `rm_admin_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_admin")]);
     await ctx.editMessageText("Pilih Admin untuk dipadam:", Markup.inlineKeyboard(buttons));
@@ -909,8 +909,8 @@ bot.action(/^rm_admin_idx_(\d+)$/, async (ctx) => {
 
 bot.action("do_add_fwd_admin", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); adminState[ctx.from.id] = { action: "WAIT_ADD_FWD" }; ctx.reply("Sila taip ID User (Forwarder):"); });
 bot.action("do_del_fwd_admin", async (ctx) => {
+    if (CASH.forwardAdmins.length === 0) return ctx.answerCbQuery("⚠️ Tiada forwarder.", { show_alert: true }).catch(()=>{});
     await ctx.answerCbQuery().catch(() => { });
-    if (CASH.forwardAdmins.length === 0) return ctx.reply("⚠️ Tiada forwarder.");
     const buttons = CASH.forwardAdmins.map((id, i) => [Markup.button.callback(`🗑 ${id}`, `rm_fwd_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_admin")]);
     await ctx.editMessageText("Pilih Forwarder untuk dipadam:", Markup.inlineKeyboard(buttons));
@@ -925,8 +925,8 @@ bot.action(/^rm_fwd_idx_(\d+)$/, async (ctx) => {
 
 bot.action("do_add_group", async (ctx) => { await ctx.answerCbQuery().catch(() => { }); ctx.reply("Sila taip ID Group:"); adminState[ctx.from.id] = { action: "WAIT_ADD_GROUP" }; });
 bot.action("do_del_group", async (ctx) => {
+    if (CASH.targetGroups.length === 0) return ctx.answerCbQuery("⚠️ Tiada group.", { show_alert: true }).catch(()=>{});
     await ctx.answerCbQuery().catch(() => { });
-    if (CASH.targetGroups.length === 0) return ctx.reply("⚠️ Tiada group.");
     const buttons = CASH.targetGroups.map((id, i) => [Markup.button.callback(`🗑 ${id}`, `rm_group_idx_${i}`)]);
     buttons.push([Markup.button.callback("🔙 Batal", "manage_admin")]);
     await ctx.editMessageText("Pilih Group untuk dipadam:", Markup.inlineKeyboard(buttons));
@@ -958,8 +958,8 @@ bot.action("do_add_ban", async (ctx) => {
 });
 
 bot.action("do_del_ban", async (ctx) => {
+    if (!CASH.bannedWords || CASH.bannedWords.length === 0) return ctx.answerCbQuery("⚠️ Senarai masih kosong.", { show_alert: true }).catch(()=>{});
     await ctx.answerCbQuery().catch(() => { });
-    if (!CASH.bannedWords || CASH.bannedWords.length === 0) return ctx.reply("⚠️ Senarai masih kosong.");
 
     const buttons = CASH.bannedWords.map((w, i) => {
         const label = String(w).replace(/\n/g, ' ').substring(0, 15);
@@ -1059,15 +1059,18 @@ bot.command("setautofwd", async (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
 
+    // Padam command supaya tak nampak di group public
+    ctx.deleteMessage().catch(() => {});
+
     if (!ctx.message.reply_to_message) {
-        return ctx.reply("⚠️ **Sila reply pada mesej** yang ingin ditambah ke Auto-Forward.", { parse_mode: "Markdown" });
+        return bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `⚠️ **Sila reply pada mesej** yang ingin ditambah ke Auto-Forward. (Dari ${ctx.from.first_name})`, { parse_mode: "Markdown" }).catch(()=>{});
     }
 
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false, currentIndex: 0 };
     if (!CASH.autoForward.messageIds) CASH.autoForward.messageIds = [];
 
     if (CASH.autoForward.messageIds.length >= 5) {
-        return ctx.reply("⚠️ Senarai dah penuh! Maksimum 5 mesej dibenarkan.\nSila `/clearautofwd` jika mahu reset.");
+        return bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `⚠️ Senarai Auto-Forward dah penuh! Maksimum 5 mesej dibenarkan.\nSila \`/clearautofwd\` jika mahu reset.`, { parse_mode: "Markdown" }).catch(()=>{});
     }
 
     CASH.autoForward.messageIds.push(ctx.message.reply_to_message.message_id);
@@ -1078,18 +1081,22 @@ bot.command("setautofwd", async (ctx) => {
     await saveConfig("autoForward", CASH.autoForward);
     startAutoForwardTimer();
 
-    ctx.reply(`✅ **Mesej ditambah ke senarai Auto-Forward!**\nJumlah semasa: ${CASH.autoForward.messageIds.length}/5 mesej.\n\nBot akan hantar 1 mesej setiap jam secara **bergilir-gilir**.\n\n_(Nota: Gunakan /clearautofwd untuk padam senarai ini)_`, { parse_mode: "Markdown" });
+    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ **Mesej ditambah ke senarai Auto-Forward!** (Oleh ${ctx.from.first_name})\nJumlah semasa: ${CASH.autoForward.messageIds.length}/5 mesej.\n\nBot akan hantar 1 mesej bergilir-gilir.\n\n_(Nota: Gunakan /clearautofwd untuk padam senarai ini)_`, { parse_mode: "Markdown" }).catch(()=>{});
 });
 
 bot.command("clearautofwd", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
+    
+    // Padam command
+    ctx.deleteMessage().catch(() => {});
+
     if (CASH.autoForward) {
         CASH.autoForward.messageIds = [];
         CASH.autoForward.isActive = false;
         CASH.autoForward.currentIndex = 0;
         await saveConfig("autoForward", CASH.autoForward);
     }
-    ctx.reply("✅ Senarai mesej Auto-Forward telah dikosongkan dan dimatikan.");
+    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ Senarai mesej Auto-Forward telah dikosongkan dan dimatikan oleh ${ctx.from.first_name}.`).catch(()=>{});
 });
 
 bot.command("forward", async (ctx) => {
