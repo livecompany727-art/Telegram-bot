@@ -2,10 +2,10 @@
     "name": "bot-v2-wizard",
     "version": "1.0.0",
     "description": "Telegram Bot V2 with Wizard",
-    "main": "index.js",
+    "main": "bot.js",
     "type": "module",
     "scripts": {
-        "start": "node index.js"
+        "start": "node bot.js"
     },
     "dependencies": {
         "telegraf": "^4.12.0",
