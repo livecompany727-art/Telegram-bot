@@ -45,7 +45,8 @@ const CASH = {
     autoReplies: {},
     stats: { totalForwards: 0, lastStatsReset: new Date() },
     autoForward: { messageIds: [], chatId: null, isActive: false, currentIndex: 0 },
-    autoForwardGroups: []
+    autoForwardGroups: [],
+    autoFwdData: { active: false, messageId: null, chatId: null, lastRun: 0 }
 };
 
 // Undo/Rollback Storage (Temporary Memory)
@@ -148,6 +149,7 @@ async function loadConfig() {
         await load("stats", { totalForwards: 0, lastStatsReset: new Date() });
         await load("autoForward", { messageIds: [], chatId: null, isActive: false, currentIndex: 0 });
         await load("autoForwardGroups", []);
+        await load("autoFwdData", { active: false, messageId: null, chatId: null, lastRun: 0 });
 
         // Start Auto-Forward Timer System
         startAutoForwardTimer();
@@ -796,12 +798,6 @@ bot.action("do_chg_title", async (ctx) => {
     );
 });
 
-bot.action("add_title_line", async (ctx) => {
-    await ctx.answerCbQuery().catch(() => { });
-    adminState[ctx.from.id] = { action: "WAIT_ADD_TITLE_LINE" };
-    ctx.editMessageText("➕ **TAMBAH BARIS**\nSila taip teks untuk baris baru:", { parse_mode: "Markdown" });
-});
-
 bot.action("del_title_line", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     const lines = (CASH.menuTitle || "").split("\n").filter(x => x.trim());
@@ -830,17 +826,24 @@ bot.action(/^rm_title_line_(\d+)$/, async (ctx) => {
     );
 });
 
-const getModernBroadcastText = (af) => {
+const getModernBroadcastText = (af, af2) => {
     const statusAF = af.isActive ? "✅ AKTIF" : "❌ TERHENTI";
     const intervalMins = af.intervalMins || (af.intervalHours ? af.intervalHours * 60 : 60);
     const intervalTxt = intervalMins >= 60 ? `${intervalMins/60} Jam` : `${intervalMins} Minit`;
     const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length}/5 Diset` : "0/5 (Kosong)";
     const groupCount = (CASH.autoForwardGroups || []).length;
 
-    const text = `📡 𝗦𝗜𝗦𝗧𝗘𝗠 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 & 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗\n━━━━━━━━━━━━━━━━━━━━\n\n⚡️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟\n↳ _Reply mesej promosi & taip_ \`/forward\`\n↳ _Tersalah hantar? Taip_ \`/undo\`\n\n🔄 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗 (𝗥𝗢𝗨𝗡𝗗-𝗥𝗢𝗕𝗜𝗡)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt}\n• 𝗠𝗲𝘀𝗲𝗷 𝗤𝘂𝗲𝘂𝗲: 📦 ${msgStatus}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${groupCount} Group\n\n📌 𝗖𝗮𝗿𝗮 𝗣𝗲𝗻𝗴𝗴𝘂𝗻𝗮𝗮𝗻:\n➕ Tambah: _Reply post dgn_ \`/setautofwd\`\n🗑 Reset: _Taip_ \`/clearautofwd\`\n━━━━━━━━━━━━━━━━━━━━`;
+    // AF2 (Kustom Minit)
+    const statusAF2 = (af2 && af2.active) ? "✅ AKTIF" : "❌ TERHENTI";
+    const intervalMins2 = (af2 && af2.intervalMins) || 120;
+    const intervalTxt2 = intervalMins2 >= 60 ? `${intervalMins2/60} Jam` : `${intervalMins2} Minit`;
+    const targetGroupCount = (CASH.targetGroups || []).length;
+
+    const text = `📡 𝗦𝗜𝗦𝗧𝗘𝗠 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 & 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗\n━━━━━━━━━━━━━━━━━━━━\n\n⚡️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟\n↳ _Reply mesej promosi & taip_ \`/forward\`\n↳ _Tersalah hantar? Taip_ \`/undo\`\n\n🔄 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗 ( 𝗥𝗢𝗨𝗡𝗗-𝗥𝗢𝗕𝗜𝗡)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt}\n• 𝗠𝗲𝘀𝗲𝗷 𝗤𝘂𝗲𝘂𝗲: 📦 ${msgStatus}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${groupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd\`\n↳ _Reset: Taip_ \`/clearautofwd\`\n\n⏱ 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥┘ (𝗞𝗨𝗦𝗧𝗢𝗠 𝗠𝗜𝗡𝗜𝗧)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF2}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt2}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${targetGroupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd2hr <minit>\`\n↳ _Stop: Taip_ \`/stopautofwd2hr\`\n━━━━━━━━━━━━━━━━━━━━`;
     
     const kbd = Markup.inlineKeyboard([
-        [Markup.button.callback(`${af.isActive ? '⏹ Tutup' : '▶️ Buka'} Auto-Fwd`, "toggle_autofwd"), Markup.button.callback(`⏳ Set Masa (${intervalTxt})`, "toggle_af_time")],
+        [Markup.button.callback(`${af.isActive ? '⏹ Stop' : '▶️ Run'} Round-Robin`, "toggle_autofwd"), Markup.button.callback(`⏳ Masa RR (${intervalTxt})`, "toggle_af_time")],
+        [Markup.button.callback(`${(af2 && af2.active) ? '⏹ Stop' : '▶️ Run'} Kustom`, "toggle_autofwd2"), Markup.button.callback(`⏳ Masa Kustom (${intervalTxt2})`, "toggle_af2_time")],
         [Markup.button.callback("🔙 Kembali", "back_home")]
     ]);
     
@@ -850,7 +853,8 @@ const getModernBroadcastText = (af) => {
 bot.action("manage_broadcast", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
-    const ui = getModernBroadcastText(CASH.autoForward);
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
     ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
 });
 
@@ -864,13 +868,15 @@ bot.action("toggle_af_time", async (ctx) => {
     if (nextIdx >= PRESETS.length) nextIdx = 0;
     
     CASH.autoForward.intervalMins = PRESETS[nextIdx];
-    await saveConfig("autoForward", CASH.autoForward);
+    const intervalTxt = CASH.autoForward.intervalMins >= 60 ? `${CASH.autoForward.intervalMins/60} Jam` : `${CASH.autoForward.intervalMins} Minit`;
+    
+    await ctx.answerCbQuery(`✅ Masa RR ditukar ke ${intervalTxt}!`).catch(() => { });
+    
+    saveConfig("autoForward", CASH.autoForward).catch(()=>{});
     startAutoForwardTimer();
     
-    const intervalTxt = CASH.autoForward.intervalMins >= 60 ? `${CASH.autoForward.intervalMins/60} Jam` : `${CASH.autoForward.intervalMins} Minit`;
-    await ctx.answerCbQuery(`✅ Masa ditukar ke ${intervalTxt}!`).catch(() => { });
-    
-    const ui = getModernBroadcastText(CASH.autoForward);
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
     ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
 });
 
@@ -878,7 +884,7 @@ bot.action("toggle_autofwd", async (ctx) => {
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
     
     if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
-        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
+        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward RR dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
     }
     await ctx.answerCbQuery().catch(() => { });
     
@@ -886,7 +892,62 @@ bot.action("toggle_autofwd", async (ctx) => {
     await saveConfig("autoForward", CASH.autoForward);
     startAutoForwardTimer();
     
-    const ui = getModernBroadcastText(CASH.autoForward);
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
+    ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
+});
+
+bot.action("toggle_autofwd2", async (ctx) => {
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    
+    if (!CASH.autoFwdData.active && (!CASH.autoFwdData.messageId || CASH.autoFwdData.messageId === null)) {
+        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward Kustom dahulu dengan me-reply mesej & menaip /setautofwd2hr.", { show_alert: true }).catch(()=>{});
+    }
+    await ctx.answerCbQuery().catch(() => { });
+    
+    CASH.autoFwdData.active = !CASH.autoFwdData.active;
+    await saveConfig("autoFwdData", CASH.autoFwdData);
+    
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
+    ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
+});
+
+bot.action("toggle_af2_time", async (ctx) => {
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    
+    const PRESETS = [2, 5, 10, 30, 60, 120, 180, 240, 360, 720]; // In minutes
+    let currentMins = CASH.autoFwdData.intervalMins || 120;
+    
+    let nextIdx = PRESETS.indexOf(currentMins) + 1;
+    if (nextIdx >= PRESETS.length) nextIdx = 0;
+    
+    CASH.autoFwdData.intervalMins = PRESETS[nextIdx];
+    const intervalTxt = CASH.autoFwdData.intervalMins >= 60 ? `${CASH.autoFwdData.intervalMins/60} Jam` : `${CASH.autoFwdData.intervalMins} Minit`;
+    
+    await ctx.answerCbQuery(`✅ Masa kustom ditukar ke ${intervalTxt}!`).catch(() => { });
+    
+    saveConfig("autoFwdData", CASH.autoFwdData).catch(()=>{});
+    
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
+    ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
+});
+
+bot.action("toggle_autofwd", async (ctx) => {
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
+    
+    if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
+        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward RR dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
+    }
+    await ctx.answerCbQuery().catch(() => { });
+    
+    CASH.autoForward.isActive = !CASH.autoForward.isActive;
+    await saveConfig("autoForward", CASH.autoForward);
+    startAutoForwardTimer();
+    
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
     ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
 });
 
@@ -1128,6 +1189,51 @@ bot.command("clearautofwd", async (ctx) => {
         await saveConfig("autoForward", CASH.autoForward);
     }
     bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ Senarai mesej Auto-Forward telah dikosongkan dan dimatikan oleh ${ctx.from.first_name}.`).catch(()=>{});
+});
+
+bot.command("setautofwd2hr", async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId) && !isForwarder(userId)) return;
+
+    if (!ctx.message.reply_to_message) {
+        return ctx.reply("⚠️ Sila reply pada mesej yang ingin di auto-forward.");
+    }
+
+    // Ambil parameter minit selepas command
+    const args = (ctx.message.text || "").split(" ").slice(1);
+    let intervalMins = 120; // Default 2 jam (120 minit)
+
+    if (args.length > 0) {
+        const parsed = parseInt(args[0]);
+        if (!isNaN(parsed) && parsed > 0) {
+            intervalMins = parsed;
+        } else {
+            return ctx.reply("⚠️ Sila masukkan nilai minit yang sah. Contoh: `/setautofwd2hr 60` untuk 60 minit.", { parse_mode: "Markdown" });
+        }
+    }
+
+    CASH.autoFwdData = {
+        active: true,
+        messageId: ctx.message.reply_to_message.message_id,
+        chatId: ctx.chat.id,
+        intervalMins: intervalMins,
+        lastRun: 0 // Set ke 0 supaya ia run terus untuk kali pertama
+    };
+    await saveConfig("autoFwdData", CASH.autoFwdData);
+
+    const hours = (intervalMins / 60).toFixed(1);
+    await ctx.reply(`✅ **AUTO-FORWARD DIAKTIFKAN**\nMesej ini akan di-forward ke semua Target Group setiap **${intervalMins} minit** (~${hours} jam).\nTaip /stopautofwd2hr untuk menghentikannya.`, { parse_mode: "Markdown" });
+});
+
+bot.command("stopautofwd2hr", async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId) && !isForwarder(userId)) return;
+
+    if (CASH.autoFwdData) {
+        CASH.autoFwdData.active = false;
+        await saveConfig("autoFwdData", CASH.autoFwdData);
+    }
+    await ctx.reply("⛔ **AUTO-FORWARD 2 JAM DIHENTIKAN**", { parse_mode: "Markdown" });
 });
 
 bot.command("forward", async (ctx) => {
@@ -1530,7 +1636,43 @@ async function startServices() {
         console.error("⚠️ [DB] MongoDB Gagal disambung (Bot mungkin lambat respon):", err.message);
     });
 
+    startAutoForwardLoop();
     startKeepAlive();
+}
+
+// --- AUTO FORWARD 2 HOURS LOOP ---
+let autoFwdTimer = null;
+function startAutoForwardLoop() {
+    if (autoFwdTimer) clearInterval(autoFwdTimer);
+    autoFwdTimer = setInterval(async () => {
+        if (!CASH.autoFwdData || !CASH.autoFwdData.active || !CASH.autoFwdData.messageId || !CASH.autoFwdData.chatId) return;
+
+        const now = Date.now();
+        const lastRun = CASH.autoFwdData.lastRun || 0;
+        const intervalMins = CASH.autoFwdData.intervalMins || 120;
+        const TARGET_MS = intervalMins * 60 * 1000;
+
+        if (now - lastRun >= TARGET_MS) {
+            CASH.autoFwdData.lastRun = now;
+            await saveConfig("autoFwdData", CASH.autoFwdData);
+
+            let targetGroups = CASH.targetGroups || [];
+            if (targetGroups.length === 0) return;
+
+            console.log(`⏳ [AUTO-FWD-2HR] Executing scheduled auto-forward (Interval: ${intervalMins}m)...`);
+            let count = 0;
+            for (const t of targetGroups) {
+                try {
+                    await bot.telegram.forwardMessage(t, CASH.autoFwdData.chatId, CASH.autoFwdData.messageId);
+                    count++;
+                    await new Promise(r => setTimeout(r, 1000)); // Delay 1 saat elak rate limit Telegram
+                } catch (e) {
+                    console.log(`Auto-Forward 2HR Error to ${t}: ${e.message}`);
+                }
+            }
+            console.log(`✅ [AUTO-FWD-2HR] Successfully forwarded to ${count} groups.`);
+        }
+    }, 60 * 1000); // Check setiap 1 minit
 }
 
 // --- KEEP ALIVE MECHANISM (PREVENT SLEEP) ---
