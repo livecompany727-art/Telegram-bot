@@ -164,15 +164,16 @@ let autoForwardInterval = null;
 function startAutoForwardTimer() {
     if (autoForwardInterval) clearInterval(autoForwardInterval);
     
-    // Semak setiap 1 minit jika sudah cukup 1 Jam
+    // Semak setiap 1 minit
     autoForwardInterval = setInterval(async () => {
         if (!CASH.autoForward || !CASH.autoForward.isActive) return;
         
         const now = Date.now();
         const lastRun = CASH.autoForward.lastRun || 0;
-        const ONE_HOUR = 1 * 60 * 60 * 1000; // Tukar ke 1 Jam
+        const intervalHours = CASH.autoForward.intervalHours || 1;
+        const TARGET_MS = intervalHours * 60 * 60 * 1000;
         
-        if (now - lastRun >= ONE_HOUR) {
+        if (now - lastRun >= TARGET_MS) {
             const { messageIds, chatId } = CASH.autoForward;
             const uniqueTargets = [...new Set(CASH.autoForwardGroups || [])];
             
@@ -560,7 +561,17 @@ bot.action(/^rm_reply_idx_(\d+)$/, async (ctx) => {
         delete CASH.autoReplies[kw];
         await saveConfig("autoReplies", CASH.autoReplies).catch(() => { });
     }
-    ctx.triggerAction("manage_auto_reply");
+    
+    const newKeys = Object.keys(CASH.autoReplies);
+    const list = newKeys.map((k, i) => `${i + 1}. <b>${k}</b> ➔ ${CASH.autoReplies[k].substring(0, 20)}...`).join("\n");
+    const txt = `🤖 <b>URUS AUTO-REPLY (KEYWORD)</b>\n\n${list || "<i>(Tiada Data)</i>"}\n\n📌 <b>Info:</b> Bot akan balas keyword ini jika dijumpai dalam chat.`;
+    await ctx.editMessageText(txt, {
+        parse_mode: "HTML",
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback("➕ Tambah Keyword", "add_reply_kw"), Markup.button.callback("🗑 Padam Keyword", "del_reply_kw")],
+            [Markup.button.callback("🔙 Kembali", "back_home")]
+        ])
+    }).catch(()=>{});
 });
 
 // --- NEW FUNCTION: STATS & EXPORT ---
@@ -589,7 +600,23 @@ bot.action("reset_stats", async (ctx) => {
     await ctx.answerCbQuery("✅ Statistik telah di-reset!").catch(() => { });
     CASH.stats = { totalForwards: 0, lastStatsReset: new Date() };
     await saveConfig("stats", CASH.stats).catch(() => { });
-    ctx.triggerAction("manage_stats");
+    
+    const subCount = subscribersColl ? await subscribersColl.countDocuments({}) : 0;
+    const txt = `📊 <b>STATISTIK & LAPORAN BOT</b>\n\n` +
+        `👥 <b>Jumlah Subscriptions:</b> ${subCount} user\n` +
+        `🚀 <b>Total Forward Berjaya:</b> ${CASH.stats.totalForwards} kali\n` +
+        `🏢 <b>Target Group:</b> ${CASH.targetGroups.length} group\n` +
+        `🗓 <b>Laporan Sejak:</b> ${new Date(CASH.stats.lastStatsReset).toLocaleDateString()}\n\n` +
+        `<i>Anda boleh download data semua subs di bawah:</i>`;
+
+    await ctx.editMessageText(txt, {
+        parse_mode: "HTML",
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback("📥 Export User Data (.txt)", "export_subs")],
+            [Markup.button.callback("🔄 Reset Stats", "reset_stats")],
+            [Markup.button.callback("🔙 Kembali", "back_home")]
+        ])
+    }).catch(()=>{});
 });
 
 bot.action("export_subs", async (ctx) => {
@@ -801,8 +828,9 @@ bot.action(/^rm_title_line_(\d+)$/, async (ctx) => {
 
 bot.action("manage_broadcast", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
-    const af = CASH.autoForward || { isActive: false, messageIds: [] };
+    const af = CASH.autoForward || { isActive: false, messageIds: [], intervalHours: 1 };
     const statusAF = af.isActive ? "✅ ON" : "❌ OFF";
+    const interval = af.intervalHours || 1;
     const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length} Mesej Diset` : "Belum diset";
 
     ctx.editMessageText(
@@ -811,21 +839,59 @@ bot.action("manage_broadcast", async (ctx) => {
         `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
         `**2. Auto-Forward Bergilir:**\n` +
         `Status: ${statusAF}\n` +
-        `Mesej: ${msgStatus} (Bot hantar 1 mesej bergilir-gilir)\n` +
+        `Masa Giliran: Setiap **${interval} Jam**\n` +
+        `Mesej: ${msgStatus} (Hantar 1 mesej bergilir)\n` +
         `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
         `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
         { 
             parse_mode: "Markdown", 
             ...Markup.inlineKeyboard([
-                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd")],
+                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd"), Markup.button.callback(`⏳ Set Masa (${interval} Jam)`, "toggle_af_time")],
                 [Markup.button.callback("🔙 Kembali", "back_home")]
             ]) 
         }
     );
 });
 
+bot.action("toggle_af_time", async (ctx) => {
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false, currentIndex: 0, intervalHours: 1 };
+    
+    let hours = CASH.autoForward.intervalHours || 1;
+    hours += 1;
+    if (hours > 12) hours = 1; // Cycle 1 to 12 hours
+    
+    CASH.autoForward.intervalHours = hours;
+    await saveConfig("autoForward", CASH.autoForward);
+    startAutoForwardTimer();
+    await ctx.answerCbQuery(`✅ Masa ditukar ke ${hours} Jam!`).catch(() => { });
+    
+    const af = CASH.autoForward;
+    const statusAF = af.isActive ? "✅ ON" : "❌ OFF";
+    const interval = af.intervalHours;
+    const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length} Mesej Diset` : "Belum diset";
+
+    ctx.editMessageText(
+        `📢 **SISTEM BROADCAST & AUTO-FORWARD**\n\n` +
+        `**1. Broadcast Manual:**\n` +
+        `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
+        `**2. Auto-Forward Bergilir:**\n` +
+        `Status: ${statusAF}\n` +
+        `Masa Giliran: Setiap **${interval} Jam**\n` +
+        `Mesej: ${msgStatus} (Hantar 1 mesej bergilir)\n` +
+        `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
+        `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
+        { 
+            parse_mode: "Markdown", 
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd"), Markup.button.callback(`⏳ Set Masa (${interval} Jam)`, "toggle_af_time")],
+                [Markup.button.callback("🔙 Kembali", "back_home")]
+            ]) 
+        }
+    ).catch(()=>{});
+});
+
 bot.action("toggle_autofwd", async (ctx) => {
-    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
+    if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false, intervalHours: 1 };
     
     if (!CASH.autoForward.isActive && (!CASH.autoForward.messageIds || CASH.autoForward.messageIds.length === 0)) {
         return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward dahulu menggunakan command /setautofwd (reply pada mesej).", { show_alert: true }).catch(()=>{});
@@ -838,6 +904,7 @@ bot.action("toggle_autofwd", async (ctx) => {
     
     const af = CASH.autoForward;
     const statusAF = af.isActive ? "✅ ON" : "❌ OFF";
+    const interval = af.intervalHours || 1;
     const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length} Mesej Diset` : "Belum diset";
 
     await ctx.editMessageText(
@@ -846,17 +913,18 @@ bot.action("toggle_autofwd", async (ctx) => {
         `Reply mesej di Group Asal, kemudian taip \`/forward\`.\n(❗️ Taip \`/undo\` jika tersalah hantar)\n\n` +
         `**2. Auto-Forward Bergilir:**\n` +
         `Status: ${statusAF}\n` +
-        `Mesej: ${msgStatus} (Bot hantar 1 mesej bergilir-gilir)\n` +
+        `Masa Giliran: Setiap **${interval} Jam**\n` +
+        `Mesej: ${msgStatus} (Hantar 1 mesej bergilir)\n` +
         `Group Tujuan: ${(CASH.autoForwardGroups || []).length} Group Khas\n\n` +
         `_(Utk tambah mesej: Reply dgn \`/setautofwd\`. Utk reset senarai: taip \`/clearautofwd\`)_`, 
         { 
             parse_mode: "Markdown", 
             ...Markup.inlineKeyboard([
-                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd")],
+                [Markup.button.callback(`${af.isActive ? 'Tutup' : 'Buka'} Auto-Forward`, "toggle_autofwd"), Markup.button.callback(`⏳ Set Masa (${interval} Jam)`, "toggle_af_time")],
                 [Markup.button.callback("🔙 Kembali", "back_home")]
             ]) 
         }
-    );
+    ).catch(()=>{});
 });
 
 // Admin & Ban Logic
