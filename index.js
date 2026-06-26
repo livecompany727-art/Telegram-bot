@@ -389,6 +389,10 @@ bot.start(async (ctx) => {
 });
 
 // --- 1. PANEL PERINTAH (BAHASA MALAYSIA) ---
+bot.command("ping", async (ctx) => {
+    ctx.reply("🏓 **PONG! Bot is ALIVE and RUNNING!**\nTime: " + new Date().toLocaleString(), { parse_mode: "Markdown" }).catch(console.error);
+});
+
 bot.command("panel", async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const txt = `🎛 **PANEL ADMIN BOT V2**\n\nSila pilih menu tetapan di bawah:`;
@@ -403,7 +407,7 @@ bot.command("panel", async (ctx) => {
             [Markup.button.callback("🚀 Refresh & Deploy", "refresh_bot")],
             [Markup.button.callback("❌ Tutup Panel", "close_panel")]
         ])
-    });
+    }).catch(e => console.error("Error /panel:", e.message));
 });
 bot.action("close_panel", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
@@ -423,7 +427,7 @@ bot.action("back_home", async (ctx) => {
             [Markup.button.callback("🚀 Refresh & Deploy", "refresh_bot")],
             [Markup.button.callback("❌ Tutup Panel", "close_panel")]
         ])
-    });
+    }).catch(e => console.error("Error back_home:", e.message));
 });
 
 bot.action("manage_system_ids", async (ctx) => {
@@ -827,7 +831,7 @@ bot.action(/^rm_title_line_(\d+)$/, async (ctx) => {
 });
 
 const getModernBroadcastText = (af) => {
-    const statusAF = af.isActive ? "✅ 𝗔𝗞𝗧𝗜𝗙" : "❌ 𝗧𝗘𝗥𝗛𝗘𝗡𝗧𝗜";
+    const statusAF = af.isActive ? "✅ AKTIF" : "❌ TERHENTI";
     const intervalMins = af.intervalMins || (af.intervalHours ? af.intervalHours * 60 : 60);
     const intervalTxt = intervalMins >= 60 ? `${intervalMins/60} Jam` : `${intervalMins} Minit`;
     const msgStatus = (af.messageIds && af.messageIds.length > 0) ? `${af.messageIds.length}/5 Diset` : "0/5 (Kosong)";
