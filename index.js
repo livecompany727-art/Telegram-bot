@@ -46,7 +46,7 @@ const CASH = {
     stats: { totalForwards: 0, lastStatsReset: new Date() },
     autoForward: { messageIds: [], chatId: null, isActive: false, currentIndex: 0 },
     autoForwardGroups: [],
-    autoFwdData: { active: false, messageId: null, chatId: null, lastRun: 0 }
+    autoFwdData: { active: false, messageIds: [], chatId: null, intervalMins: 120, currentIndex: 0, lastRun: 0 }
 };
 
 // Undo/Rollback Storage (Temporary Memory)
@@ -149,7 +149,16 @@ async function loadConfig() {
         await load("stats", { totalForwards: 0, lastStatsReset: new Date() });
         await load("autoForward", { messageIds: [], chatId: null, isActive: false, currentIndex: 0 });
         await load("autoForwardGroups", []);
-        await load("autoFwdData", { active: false, messageId: null, chatId: null, lastRun: 0 });
+        await load("autoFwdData", { active: false, messageIds: [], chatId: null, intervalMins: 120, currentIndex: 0, lastRun: 0 });
+
+        // Migration: tukar messageId lama (single) ke messageIds (array)
+        if (CASH.autoFwdData.messageId && !CASH.autoFwdData.messageIds) {
+            CASH.autoFwdData.messageIds = [CASH.autoFwdData.messageId];
+            delete CASH.autoFwdData.messageId;
+            await saveConfig("autoFwdData", CASH.autoFwdData);
+        }
+        if (!CASH.autoFwdData.messageIds) CASH.autoFwdData.messageIds = [];
+        if (CASH.autoFwdData.currentIndex === undefined) CASH.autoFwdData.currentIndex = 0;
 
         // Start Auto-Forward Timer System
         startAutoForwardTimer();
@@ -176,7 +185,9 @@ function startAutoForwardTimer() {
         const TARGET_MS = intervalMins * 60 * 1000;
         
         if (now - lastRun >= TARGET_MS) {
-            const { messageIds, chatId } = CASH.autoForward;
+            const { messageIds } = CASH.autoForward;
+            // Sentiasa forward dari SOURCE_CHAT_ID supaya label "Forwarded from" betul
+            const sourceChatId = CASH.SOURCE_CHAT_ID;
             const uniqueTargets = [...new Set(CASH.autoForwardGroups || [])];
             
             if (uniqueTargets.length === 0 || !messageIds || messageIds.length === 0) return;
@@ -190,9 +201,9 @@ function startAutoForwardTimer() {
             
             for (const t of uniqueTargets) {
                 try {
-                    await bot.telegram.forwardMessage(t, chatId, mId);
+                    await bot.telegram.forwardMessage(t, sourceChatId, mId);
                     count++;
-                    await new Promise(r => setTimeout(r, 500)); // Delay sikit elak limit
+                    await new Promise(r => setTimeout(r, 500));
                 } catch (e) {
                     console.log(`Auto-Forward Error to ${t}: ${e.message}`);
                 }
@@ -201,11 +212,42 @@ function startAutoForwardTimer() {
             // Update state & next index
             CASH.autoForward.currentIndex = (cIndex + 1) % messageIds.length;
             CASH.autoForward.lastRun = now;
+            CASH.autoForward.lastWarning = 0; // Reset warning untuk cycle seterusnya
             saveConfig("autoForward", CASH.autoForward).catch(()=>{});
             
             if (count > 0 && CASH.stats) {
                 CASH.stats.totalForwards += count;
                 saveConfig("stats", CASH.stats).catch(()=>{});
+            }
+
+            // Log ke group selepas forward
+            const nextMins = intervalMins;
+            const nextTxt = nextMins >= 60 ? `${(nextMins/60).toFixed(1)} Jam` : `${nextMins} Minit`;
+            bot.telegram.sendMessage(
+                CASH.LOG_GROUP_ID,
+                `✅ *AUTO-FORWARD ROUND-ROBIN SELESAI*\n\n📦 Mesej Index: ${cIndex + 1}/${messageIds.length}\n🎯 Berjaya ke: ${count}/${uniqueTargets.length} Group\n⏰ Forward seterusnya dalam: ~${nextTxt}`,
+                { parse_mode: "Markdown" }
+            ).catch(()=>{});
+
+        } else {
+            // === PRE-WARNING: 5 minit sebelum forward ===
+            const WARNING_MS = 5 * 60 * 1000; // 5 minit
+            const timeRemaining = TARGET_MS - (now - lastRun);
+            const lastWarning = CASH.autoForward.lastWarning || 0;
+
+            if (timeRemaining <= WARNING_MS && timeRemaining > 0 && (now - lastWarning) > WARNING_MS) {
+                CASH.autoForward.lastWarning = now;
+                saveConfig("autoForward", CASH.autoForward).catch(()=>{});
+
+                const { messageIds } = CASH.autoForward;
+                const uniqueTargets = [...new Set(CASH.autoForwardGroups || [])];
+                const minsLeft = Math.ceil(timeRemaining / 60000);
+
+                bot.telegram.sendMessage(
+                    CASH.LOG_GROUP_ID,
+                    `⏰ *AMARAN AUTO-FORWARD (ROUND-ROBIN)*\n\n🔔 Akan forward dalam lebih kurang *${minsLeft} minit*!\n📦 Mesej dalam Queue: ${(messageIds || []).length}/5\n🎯 Sasaran: ${uniqueTargets.length} Group\n\n_Bersiap sedia..._`,
+                    { parse_mode: "Markdown" }
+                ).catch(()=>{});
             }
         }
     }, 60 * 1000); 
@@ -392,11 +434,14 @@ bot.start(async (ctx) => {
 
 // --- 1. PANEL PERINTAH (BAHASA MALAYSIA) ---
 bot.command("ping", async (ctx) => {
-    ctx.reply("🏓 **PONG! Bot is ALIVE and RUNNING!**\nTime: " + new Date().toLocaleString(), { parse_mode: "Markdown" }).catch(console.error);
+    // /ping boleh guna di mana-mana, tanpa check admin - untuk test bot hidup
+    ctx.reply("🏓 **PONG! Bot is ALIVE and RUNNING!**\nTime: " + new Date().toLocaleString() + "\nYour ID: `" + (ctx.from ? ctx.from.id : 'unknown') + "`", { parse_mode: "Markdown" }).catch(console.error);
 });
 
 bot.command("panel", async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
+    if (!ctx.from) return console.log("[PANEL] ctx.from is undefined!");
+    console.log(`[PANEL] Called by ID: ${ctx.from.id}, isAdmin: ${isAdmin(ctx.from.id)}`);
+    if (!isAdmin(ctx.from.id)) return ctx.reply("❌ Anda tidak mempunyai akses admin.").catch(() => {});
     const txt = `🎛 **PANEL ADMIN BOT V2**\n\nSila pilih menu tetapan di bawah:`;
     await ctx.reply(txt, {
         parse_mode: "Markdown",
@@ -845,8 +890,9 @@ const getModernBroadcastText = (af, af2) => {
     const intervalMins2 = (af2 && af2.intervalMins) || 120;
     const intervalTxt2 = intervalMins2 >= 60 ? `${intervalMins2/60} Jam` : `${intervalMins2} Minit`;
     const targetGroupCount = (CASH.targetGroups || []).length;
+    const msgStatus2 = (af2 && af2.messageIds && af2.messageIds.length > 0) ? `${af2.messageIds.length}/5 Diset` : "0/5 (Kosong)";
 
-    const text = `📡 𝗦𝗜𝗦𝗧𝗘𝗠 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 & 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗\n━━━━━━━━━━━━━━━━━━━━\n\n⚡️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟\n↳ _Reply mesej promosi & taip_ \`/forward\`\n↳ _Tersalah hantar? Taip_ \`/undo\`\n\n🔄 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗 ( 𝗥𝗢𝗨𝗡𝗗-𝗥𝗢𝗕𝗜𝗡)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt}\n• 𝗠𝗲𝘀𝗲𝗷 𝗤𝘂𝗲𝘂𝗲: 📦 ${msgStatus}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${groupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd\`\n↳ _Reset: Taip_ \`/clearautofwd\`\n\n⏱ 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥┘ (𝗞𝗨𝗦𝗧𝗢𝗠 𝗠𝗜𝗡𝗜𝗧)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF2}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt2}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${targetGroupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd2hr <minit>\`\n↳ _Stop: Taip_ \`/stopautofwd2hr\`\n━━━━━━━━━━━━━━━━━━━━`;
+    const text = `📡 𝗦𝗜𝗦𝗧𝗘𝗠 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 & 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗\n━━━━━━━━━━━━━━━━━━━━\n\n⚡️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟\n↳ _Reply mesej promosi & taip_ \`/forward\`\n↳ _Tersalah hantar? Taip_ \`/undo\`\n\n🔄 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗 ( 𝗥𝗢𝗨𝗡𝗗-𝗥𝗢𝗕𝗜𝗡)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt}\n• 𝗠𝗲𝘀𝗲𝗷 𝗤𝘂𝗲𝘂𝗲: 📦 ${msgStatus}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${groupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd\`\n↳ _Reset: Taip_ \`/clearautofwd\`\n\n⏱ 𝗔𝗨𝗧𝗢-𝗙𝗢𝗥𝗪𝗔𝗥𝗗 (𝗞𝗨𝗦𝗧𝗢𝗠 𝗠𝗜𝗡𝗜𝗧)\n• 𝗦𝘁𝗮𝘁𝘂𝘀: ${statusAF2}\n• 𝗠𝗮𝘀𝗮 𝗚𝗶𝗹𝗶𝗿𝗮𝗻: ⏳ ${intervalTxt2}\n• 𝗠𝗲𝘀𝗲𝗷 𝗤𝘂𝗲𝘂𝗲: 📦 ${msgStatus2}\n• 𝗚𝗿𝗼𝘂𝗽 𝗦𝗮𝘀𝗮𝗿𝗮𝗻: 🎯 ${targetGroupCount} Group\n↳ _Set: Reply post & taip_ \`/setautofwd2hr <minit>\`\n↳ _Reset: Taip_ \`/clearautofwd2hr\`\n↳ _Stop: Taip_ \`/stopautofwd2hr\`\n━━━━━━━━━━━━━━━━━━━━`;
     
     const kbd = Markup.inlineKeyboard([
         [Markup.button.callback(`${af.isActive ? '⏹ Stop' : '▶️ Run'} Round-Robin`, "toggle_autofwd"), Markup.button.callback(`⏳ Masa RR (${intervalTxt})`, "toggle_af_time")],
@@ -860,7 +906,8 @@ const getModernBroadcastText = (af, af2) => {
 bot.action("manage_broadcast", async (ctx) => {
     await ctx.answerCbQuery().catch(() => { });
     if (!CASH.autoForward) CASH.autoForward = { messageIds: [], chatId: null, isActive: false };
-    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageIds: [], chatId: null, intervalMins: 120, currentIndex: 0, lastRun: 0 };
+    if (!CASH.autoFwdData.messageIds) CASH.autoFwdData.messageIds = [];
     const ui = getModernBroadcastText(CASH.autoForward, CASH.autoFwdData);
     ctx.editMessageText(ui.text, { parse_mode: "Markdown", ...ui.kbd }).catch(()=>{});
 });
@@ -905,10 +952,11 @@ bot.action("toggle_autofwd", async (ctx) => {
 });
 
 bot.action("toggle_autofwd2", async (ctx) => {
-    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageId: null, chatId: null, intervalMins: 120, lastRun: 0 };
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageIds: [], chatId: null, intervalMins: 120, currentIndex: 0, lastRun: 0 };
+    if (!CASH.autoFwdData.messageIds) CASH.autoFwdData.messageIds = [];
     
-    if (!CASH.autoFwdData.active && (!CASH.autoFwdData.messageId || CASH.autoFwdData.messageId === null)) {
-        return ctx.answerCbQuery("⚠️ Sila set mesej Auto-Forward Kustom dahulu dengan me-reply mesej & menaip /setautofwd2hr.", { show_alert: true }).catch(()=>{});
+    if (!CASH.autoFwdData.active && CASH.autoFwdData.messageIds.length === 0) {
+        return ctx.answerCbQuery("⚠️ Sila set mesej dahulu! Reply pada mesej & taip /setautofwd2hr <minit>", { show_alert: true }).catch(()=>{});
     }
     await ctx.answerCbQuery().catch(() => { });
     
@@ -1156,14 +1204,15 @@ bot.command("setautofwd", async (ctx) => {
     }
 
     CASH.autoForward.messageIds.push(ctx.message.reply_to_message.message_id);
-    CASH.autoForward.chatId = ctx.chat.id;
+    // Sentiasa simpan SOURCE_CHAT_ID supaya "Forwarded from" label betul
+    CASH.autoForward.chatId = CASH.SOURCE_CHAT_ID;
     CASH.autoForward.isActive = true; // Auto ON
     CASH.autoForward.lastRun = Date.now(); // Reset masa
     
     await saveConfig("autoForward", CASH.autoForward);
     startAutoForwardTimer();
 
-    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ **Mesej ditambah ke senarai Auto-Forward!** (Oleh ${ctx.from.first_name})\nJumlah semasa: ${CASH.autoForward.messageIds.length}/5 mesej.\n\nBot akan hantar 1 mesej bergilir-gilir.\n\n_(Nota: Gunakan /clearautofwd untuk padam senarai ini)_`, { parse_mode: "Markdown" }).catch(()=>{});
+    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ **Mesej ditambah ke senarai Auto-Forward!** (Oleh ${ctx.from.first_name})\nJumlah semasa: ${CASH.autoForward.messageIds.length}/5 mesej.\n\nBot akan forward dari Source Group (label betul).\n\n_(Nota: Gunakan /clearautofwd untuk padam senarai ini)_`, { parse_mode: "Markdown" }).catch(()=>{});
 });
 
 bot.command("clearautofwd", async (ctx) => {
@@ -1202,28 +1251,57 @@ bot.command("setautofwd2hr", async (ctx) => {
         }
     }
 
-    CASH.autoFwdData = {
-        active: true,
-        messageId: ctx.message.reply_to_message.message_id,
-        chatId: ctx.chat.id,
-        intervalMins: intervalMins,
-        lastRun: 0 // Set ke 0 supaya ia run terus untuk kali pertama
-    };
+    if (!CASH.autoFwdData) CASH.autoFwdData = { active: false, messageIds: [], chatId: null, intervalMins: 120, currentIndex: 0, lastRun: 0 };
+    if (!CASH.autoFwdData.messageIds) CASH.autoFwdData.messageIds = [];
+
+    if (CASH.autoFwdData.messageIds.length >= 5) {
+        ctx.deleteMessage().catch(() => {});
+        return ctx.reply(`⚠️ Senarai Kustom Auto-Forward dah penuh! (${CASH.autoFwdData.messageIds.length}/5)\nGunakan /clearautofwd2hr untuk reset.`, { parse_mode: "Markdown" });
+    }
+
+    CASH.autoFwdData.messageIds.push(ctx.message.reply_to_message.message_id);
+    // Sentiasa simpan SOURCE_CHAT_ID supaya label "Forwarded from" betul
+    CASH.autoFwdData.chatId = CASH.SOURCE_CHAT_ID;
+    // Kekalkan intervalMins jika ada, atau guna nilai baru
+    CASH.autoFwdData.intervalMins = intervalMins;
+    CASH.autoFwdData.active = true;
+    if (CASH.autoFwdData.lastRun === undefined) CASH.autoFwdData.lastRun = 0;
+    if (CASH.autoFwdData.currentIndex === undefined) CASH.autoFwdData.currentIndex = 0;
     await saveConfig("autoFwdData", CASH.autoFwdData);
 
+    ctx.deleteMessage().catch(() => {});
     const hours = (intervalMins / 60).toFixed(1);
-    await ctx.reply(`✅ **AUTO-FORWARD DIAKTIFKAN**\nMesej ini akan di-forward ke semua Target Group setiap **${intervalMins} minit** (~${hours} jam).\nTaip /stopautofwd2hr untuk menghentikannya.`, { parse_mode: "Markdown" });
+    await ctx.reply(`✅ **MESEJ DITAMBAH KE QUEUE KUSTOM!**\n\n📦 Queue: ${CASH.autoFwdData.messageIds.length}/5 mesej\n⏱ Interval: ${intervalMins} minit (~${hours} jam)\n\nGunakan /clearautofwd2hr untuk reset queue.`, { parse_mode: "Markdown" });
+    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ **Mesej Kustom ditambah!** (Oleh ${ctx.from.first_name})\nQueue: ${CASH.autoFwdData.messageIds.length}/5 mesej\nInterval: ${intervalMins} minit`, { parse_mode: "Markdown" }).catch(()=>{});
+});
+
+bot.command("clearautofwd2hr", async (ctx) => {
+    if (!isAdmin(ctx.from.id) && !isForwarder(ctx.from.id)) return;
+    ctx.deleteMessage().catch(() => {});
+
+    if (CASH.autoFwdData) {
+        CASH.autoFwdData.messageIds = [];
+        CASH.autoFwdData.active = false;
+        CASH.autoFwdData.currentIndex = 0;
+        await saveConfig("autoFwdData", CASH.autoFwdData);
+    }
+    bot.telegram.sendMessage(CASH.LOG_GROUP_ID, `✅ Queue Kustom Auto-Forward dikosongkan & dimatikan oleh ${ctx.from.first_name}.`).catch(()=>{});
 });
 
 bot.command("stopautofwd2hr", async (ctx) => {
     const userId = ctx.from.id;
+    const userName = ctx.from.first_name || "Unknown";
     if (!isAdmin(userId) && !isForwarder(userId)) return;
+
+    ctx.deleteMessage().catch(() => {});
 
     if (CASH.autoFwdData) {
         CASH.autoFwdData.active = false;
         await saveConfig("autoFwdData", CASH.autoFwdData);
     }
-    await ctx.reply("⛔ **AUTO-FORWARD 2 JAM DIHENTIKAN**", { parse_mode: "Markdown" });
+
+    const logText = `⛔ **AUTO-FORWARD DIHENTIKAN**\n\n👤 Oleh: ${userName} (\`${userId}\`)\n⏰ Masa: ${new Date().toLocaleString("ms-MY")}\n\n_Auto-Forward Kustom telah dimatikan._`;
+    await bot.telegram.sendMessage(CASH.LOG_GROUP_ID, logText, { parse_mode: "Markdown" }).catch(() => {});
 });
 
 bot.command("forward", async (ctx) => {
@@ -1638,7 +1716,8 @@ let autoFwdTimer = null;
 function startAutoForwardLoop() {
     if (autoFwdTimer) clearInterval(autoFwdTimer);
     autoFwdTimer = setInterval(async () => {
-        if (!CASH.autoFwdData || !CASH.autoFwdData.active || !CASH.autoFwdData.messageId || !CASH.autoFwdData.chatId) return;
+        if (!CASH.autoFwdData || !CASH.autoFwdData.active) return;
+        if (!CASH.autoFwdData.messageIds || CASH.autoFwdData.messageIds.length === 0) return;
 
         const now = Date.now();
         const lastRun = CASH.autoFwdData.lastRun || 0;
@@ -1647,23 +1726,66 @@ function startAutoForwardLoop() {
 
         if (now - lastRun >= TARGET_MS) {
             CASH.autoFwdData.lastRun = now;
+            CASH.autoFwdData.lastWarning = 0; // Reset warning untuk cycle seterusnya
             await saveConfig("autoFwdData", CASH.autoFwdData);
 
             let targetGroups = CASH.targetGroups || [];
             if (targetGroups.length === 0) return;
 
-            console.log(`⏳ [AUTO-FWD-2HR] Executing scheduled auto-forward (Interval: ${intervalMins}m)...`);
+            // Round-Robin untuk Kustom
+            const messageIds = CASH.autoFwdData.messageIds || [];
+            if (messageIds.length === 0) return;
+
+            let cIndex = CASH.autoFwdData.currentIndex || 0;
+            if (cIndex >= messageIds.length) cIndex = 0;
+            const mId = messageIds[cIndex];
+
+            // Sentiasa forward dari SOURCE_CHAT_ID supaya label "Forwarded from" betul
+            const sourceChatId = CASH.SOURCE_CHAT_ID;
+            console.log(`⏳ [AUTO-FWD-KUSTOM] Executing msg index ${cIndex + 1}/${messageIds.length} (Interval: ${intervalMins}m)...`);
             let count = 0;
             for (const t of targetGroups) {
                 try {
-                    await bot.telegram.forwardMessage(t, CASH.autoFwdData.chatId, CASH.autoFwdData.messageId);
+                    await bot.telegram.forwardMessage(t, sourceChatId, mId);
                     count++;
-                    await new Promise(r => setTimeout(r, 1000)); // Delay 1 saat elak rate limit Telegram
+                    await new Promise(r => setTimeout(r, 1000));
                 } catch (e) {
-                    console.log(`Auto-Forward 2HR Error to ${t}: ${e.message}`);
+                    console.log(`Auto-Forward Kustom Error to ${t}: ${e.message}`);
                 }
             }
-            console.log(`✅ [AUTO-FWD-2HR] Successfully forwarded to ${count} groups.`);
+
+            // Update index untuk next cycle
+            CASH.autoFwdData.currentIndex = (cIndex + 1) % messageIds.length;
+            await saveConfig("autoFwdData", CASH.autoFwdData);
+            console.log(`✅ [AUTO-FWD-KUSTOM] Successfully forwarded to ${count} groups.`);
+
+            // Log ke group selepas forward
+            const nextTxt = intervalMins >= 60 ? `${(intervalMins/60).toFixed(1)} Jam` : `${intervalMins} Minit`;
+            bot.telegram.sendMessage(
+                CASH.LOG_GROUP_ID,
+                `✅ *AUTO-FORWARD KUSTOM SELESAI*\n\n📦 Mesej Index: ${cIndex + 1}/${messageIds.length}\n🎯 Berjaya ke: ${count}/${targetGroups.length} Group\n⏰ Forward seterusnya dalam: ~${nextTxt}`,
+                { parse_mode: "Markdown" }
+            ).catch(()=>{});
+
+        } else {
+            // === PRE-WARNING: 5 minit sebelum forward ===
+            const WARNING_MS = 5 * 60 * 1000; // 5 minit
+            const timeRemaining = TARGET_MS - (now - lastRun);
+            const lastWarning = CASH.autoFwdData.lastWarning || 0;
+
+            if (timeRemaining <= WARNING_MS && timeRemaining > 0 && (now - lastWarning) > WARNING_MS) {
+                CASH.autoFwdData.lastWarning = now;
+                saveConfig("autoFwdData", CASH.autoFwdData).catch(()=>{});
+
+                const minsLeft = Math.ceil(timeRemaining / 60000);
+                const targetGroups = CASH.targetGroups || [];
+
+                bot.telegram.sendMessage(
+                    CASH.LOG_GROUP_ID,
+                    `⏰ *AMARAN AUTO-FORWARD (KUSTOM)*\n\n🔔 Akan forward dalam lebih kurang *${minsLeft} minit*!\n🎯 Sasaran: ${targetGroups.length} Group\n⏱ Interval: ${intervalMins >= 60 ? `${(intervalMins/60).toFixed(1)} Jam` : `${intervalMins} Minit`}\n\n_Bersiap sedia..._`,
+                    { parse_mode: "Markdown" }
+                ).catch(()=>{});
+            }
         }
     }, 60 * 1000); // Check setiap 1 minit
 }
